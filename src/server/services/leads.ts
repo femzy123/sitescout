@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or } from "drizzle-orm";
 
 import { getDb } from "@/server/db";
 import {
@@ -14,6 +14,49 @@ import {
 } from "@/server/db/schema";
 
 export type LeadListRow = Awaited<ReturnType<typeof getLeads>>[number];
+
+export async function getLeadExportRows(
+  organizationId: string,
+  leadIds?: string[],
+) {
+  return getDb()
+    .select({
+      leadId: leads.id,
+      businessName: businesses.name,
+      category: businesses.primaryCategory,
+      website: businesses.websiteUrl,
+      businessPhone: businesses.phone,
+      formattedAddress: businesses.formattedAddress,
+      googleMapsUrl: businesses.googleMapsUrl,
+      rating: businesses.rating,
+      reviewCount: businesses.userRatingCount,
+      contactName: leads.contactName,
+      contactEmail: leads.contactEmail,
+      contactPhone: leads.contactPhone,
+      qualification: leads.qualification,
+      opportunityScore: leads.opportunityScore,
+      scoreStatus: leads.scoreStatus,
+      websiteStatus: leads.websiteStatus,
+      lostReason: leads.lostReason,
+      lastContactedAt: leads.lastContactedAt,
+      nextFollowUpAt: leads.nextFollowUpAt,
+    })
+    .from(leads)
+    .innerJoin(
+      businesses,
+      and(
+        eq(businesses.organizationId, leads.organizationId),
+        eq(businesses.id, leads.businessId),
+      ),
+    )
+    .where(
+      and(
+        eq(leads.organizationId, organizationId),
+        leadIds ? inArray(leads.id, leadIds) : undefined,
+      ),
+    )
+    .orderBy(desc(leads.opportunityScore), desc(leads.updatedAt));
+}
 
 export async function getLeads(organizationId: string, search?: string) {
   const db = getDb();

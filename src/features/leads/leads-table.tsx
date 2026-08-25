@@ -1,7 +1,11 @@
 "use client";
 
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  ChevronDown,
+  Download,
   ExternalLink,
+  FileDown,
   Globe2,
   LoaderCircle,
   Radar,
@@ -36,6 +40,7 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState<"selected" | "all" | null>(null);
   const [batchProgress, setBatchProgress] = useState<{
     current: number;
     total: number;
@@ -162,6 +167,59 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
     }
   }
 
+  async function exportLeads(scope: "selected" | "all") {
+    const leadIds =
+      scope === "selected"
+        ? [...selected].filter((id) => !deletedIds.has(id))
+        : undefined;
+    if (scope === "selected" && !leadIds?.length) return;
+
+    setExporting(scope);
+    try {
+      const response = await fetch("/api/leads/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope,
+          ...(leadIds ? { leadIds } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(data?.error ?? "Lead export failed");
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition");
+      const filename =
+        disposition?.match(/filename="([^"]+)"/i)?.[1] ??
+        `sitescout-${scope}-leads-${new Date().toISOString().slice(0, 10)}.csv`;
+      const objectUrl = URL.createObjectURL(blob);
+      const download = document.createElement("a");
+      download.href = objectUrl;
+      download.download = filename;
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+
+      toast.success("CSV export ready", {
+        description:
+          scope === "selected"
+            ? `${leadIds?.length ?? 0} selected lead${leadIds?.length === 1 ? "" : "s"} exported`
+            : "All leads exported",
+      });
+    } catch (error) {
+      toast.error("Could not export leads", {
+        description: error instanceof Error ? error.message : "Try again",
+      });
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       {batchProgress && (
@@ -206,6 +264,64 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
             />
           </div>
           <div className="flex items-center gap-2">
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={Boolean(exporting) || deleting}
+                >
+                  {exporting ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Download className="size-4" />
+                  )}
+                  {exporting ? "Exporting..." : "Export"}
+                  <ChevronDown className="size-3.5 text-muted" />
+                </Button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  align="end"
+                  sideOffset={8}
+                  className="z-50 min-w-64 rounded-xl border border-border-strong bg-[#111014] p-1.5 shadow-2xl outline-none"
+                >
+                  <DropdownMenu.Label className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-muted">
+                    Download CSV
+                  </DropdownMenu.Label>
+                  <DropdownMenu.Item
+                    disabled={!selected.size || Boolean(exporting)}
+                    onSelect={() => void exportLeads("selected")}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 outline-none transition data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-strong"
+                  >
+                    <FileDown className="mt-0.5 size-4 shrink-0 text-violet-300" />
+                    <span>
+                      <span className="block text-sm font-semibold">
+                        Export selected ({selected.size})
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Only the leads you checked
+                      </span>
+                    </span>
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    disabled={Boolean(exporting)}
+                    onSelect={() => void exportLeads("all")}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 outline-none transition data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-strong"
+                  >
+                    <Download className="mt-0.5 size-4 shrink-0 text-cyan-300" />
+                    <span>
+                      <span className="block text-sm font-semibold">
+                        Export all leads
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Your complete lead collection
+                      </span>
+                    </span>
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
             <Badge>{selected.size} selected</Badge>
             <ConfirmDeleteDialog
               title={`Delete ${selected.size} lead${selected.size === 1 ? "" : "s"}?`}
