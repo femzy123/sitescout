@@ -31,10 +31,17 @@ export const organizationRole = pgEnum("organization_role", [
 ]);
 export const provenance = pgEnum("provenance", [
   "provider",
+  "import",
   "website",
   "manual",
   "ai",
   "system",
+]);
+export const leadImportStatus = pgEnum("lead_import_status", [
+  "processing",
+  "completed",
+  "partial",
+  "failed",
 ]);
 export const searchStatus = pgEnum("search_status", [
   "running",
@@ -184,7 +191,15 @@ export const businesses = pgTable(
   "businesses",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    googlePlaceId: text("google_place_id").notNull(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    googlePlaceId: text("google_place_id"),
+    externalSource: text("external_source"),
+    externalId: text("external_id"),
+    normalizedDomain: text("normalized_domain"),
+    normalizedName: text("normalized_name"),
+    normalizedAddress: text("normalized_address"),
     name: text("name").notNull(),
     formattedAddress: text("formatted_address"),
     phone: text("phone"),
@@ -215,8 +230,25 @@ export const businesses = pgTable(
     ...timestamps,
   },
   (table) => [
-    uniqueIndex("businesses_google_place_id_uidx").on(table.googlePlaceId),
-    index("businesses_name_idx").on(table.name),
+    uniqueIndex("businesses_org_id_uidx").on(table.organizationId, table.id),
+    uniqueIndex("businesses_org_google_place_uidx")
+      .on(table.organizationId, table.googlePlaceId)
+      .where(sql`${table.googlePlaceId} is not null`),
+    uniqueIndex("businesses_org_external_uidx")
+      .on(table.organizationId, table.externalSource, table.externalId)
+      .where(
+        sql`${table.externalSource} is not null and ${table.externalId} is not null`,
+      ),
+    index("businesses_org_domain_idx").on(
+      table.organizationId,
+      table.normalizedDomain,
+    ),
+    index("businesses_org_name_address_idx").on(
+      table.organizationId,
+      table.normalizedName,
+      table.normalizedAddress,
+    ),
+    index("businesses_org_name_idx").on(table.organizationId, table.name),
   ],
 );
 
@@ -274,9 +306,7 @@ export const discoveryResults = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     searchId: uuid("search_id").notNull(),
-    businessId: uuid("business_id")
-      .notNull()
-      .references(() => businesses.id, { onDelete: "restrict" }),
+    businessId: uuid("business_id").notNull(),
     rank: integer("rank").notNull(),
     state: candidateState("state").default("new").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -293,6 +323,11 @@ export const discoveryResults = pgTable(
       columns: [table.organizationId, table.searchId],
       foreignColumns: [discoverySearches.organizationId, discoverySearches.id],
     }).onDelete("cascade"),
+    foreignKey({
+      name: "discovery_results_business_org_fk",
+      columns: [table.organizationId, table.businessId],
+      foreignColumns: [businesses.organizationId, businesses.id],
+    }).onDelete("restrict"),
     check("discovery_results_rank_check", sql`${table.rank} > 0`),
     index("discovery_results_org_state_idx").on(
       table.organizationId,
@@ -308,9 +343,7 @@ export const leads = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    businessId: uuid("business_id")
-      .notNull()
-      .references(() => businesses.id, { onDelete: "restrict" }),
+    businessId: uuid("business_id").notNull(),
     assignedTo: uuid("assigned_to"),
     pipelineStage: pipelineStage("pipeline_stage").default("new").notNull(),
     qualification: qualification("qualification")
@@ -347,6 +380,11 @@ export const leads = pgTable(
         organizationMembers.userId,
       ],
     }),
+    foreignKey({
+      name: "leads_business_org_fk",
+      columns: [table.organizationId, table.businessId],
+      foreignColumns: [businesses.organizationId, businesses.id],
+    }).onDelete("restrict"),
     check(
       "leads_opportunity_score_check",
       sql`${table.opportunityScore} is null or (${table.opportunityScore} between 0 and 100)`,
@@ -363,6 +401,62 @@ export const leads = pgTable(
     index("leads_org_follow_up_idx").on(
       table.organizationId,
       table.nextFollowUpAt,
+    ),
+  ],
+);
+
+export const leadImports = pgTable(
+  "lead_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").notNull(),
+    fileName: text("file_name").notNull(),
+    sourceName: text("source_name").notNull(),
+    status: leadImportStatus("status").default("processing").notNull(),
+    totalRows: integer("total_rows").default(0).notNull(),
+    processedRows: integer("processed_rows").default(0).notNull(),
+    createdCount: integer("created_count").default(0).notNull(),
+    updatedCount: integer("updated_count").default(0).notNull(),
+    skippedCount: integer("skipped_count").default(0).notNull(),
+    rejectedCount: integer("rejected_count").default(0).notNull(),
+    columnMapping: jsonb("column_mapping")
+      .$type<Record<string, string[]>>()
+      .default({})
+      .notNull(),
+    errorSummary: jsonb("error_summary")
+      .$type<Array<{ row: number; code: string; message: string }>>()
+      .default([])
+      .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    foreignKey({
+      name: "lead_imports_creator_membership_fk",
+      columns: [table.organizationId, table.createdBy],
+      foreignColumns: [
+        organizationMembers.organizationId,
+        organizationMembers.userId,
+      ],
+    }),
+    check(
+      "lead_imports_counts_check",
+      sql`
+        ${table.totalRows} >= 0 and
+        ${table.processedRows} >= 0 and
+        ${table.createdCount} >= 0 and
+        ${table.updatedCount} >= 0 and
+        ${table.skippedCount} >= 0 and
+        ${table.rejectedCount} >= 0 and
+        ${table.processedRows} <= ${table.totalRows}
+      `,
+    ),
+    index("lead_imports_org_created_idx").on(
+      table.organizationId,
+      table.createdAt,
     ),
   ],
 );
@@ -666,7 +760,9 @@ export const leadEvents = pgTable(
 
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   members: many(organizationMembers),
+  businesses: many(businesses),
   leads: many(leads),
+  imports: many(leadImports),
 }));
 export const usersRelations = relations(users, ({ many }) => ({
   memberships: many(organizationMembers),
@@ -684,9 +780,23 @@ export const organizationMembersRelations = relations(
     }),
   }),
 );
-export const businessesRelations = relations(businesses, ({ many }) => ({
+export const businessesRelations = relations(businesses, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [businesses.organizationId],
+    references: [organizations.id],
+  }),
   leads: many(leads),
   discoveryResults: many(discoveryResults),
+}));
+export const leadImportsRelations = relations(leadImports, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [leadImports.organizationId],
+    references: [organizations.id],
+  }),
+  creator: one(users, {
+    fields: [leadImports.createdBy],
+    references: [users.id],
+  }),
 }));
 export const leadsRelations = relations(leads, ({ one, many }) => ({
   organization: one(organizations, {
@@ -710,5 +820,6 @@ export type Organization = typeof organizations.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Business = typeof businesses.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
+export type LeadImport = typeof leadImports.$inferSelect;
 export type WebsiteAudit = typeof websiteAudits.$inferSelect;
 export type LeadScore = typeof leadScores.$inferSelect;

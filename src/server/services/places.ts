@@ -2,6 +2,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { getServerEnv } from "@/lib/env";
+import { normalizeDomain, normalizeText } from "@/lib/lead-intake";
 import { getDb } from "@/server/db";
 import {
   businesses,
@@ -46,7 +47,7 @@ type GoogleTextSearchResponse = {
 export type DiscoveryCandidate = {
   discoveryResultId: string;
   businessId: string;
-  placeId: string;
+  placeId: string | null;
   name: string;
   address: string | null;
   phone: string | null;
@@ -133,7 +134,13 @@ export async function runDiscovery(
         const [business] = await db
           .insert(businesses)
           .values({
+            organizationId: context.organizationId,
             googlePlaceId: place.id,
+            normalizedDomain: normalizeDomain(place.websiteUri),
+            normalizedName: normalizeText(
+              place.displayName?.text ?? "Unnamed business",
+            ),
+            normalizedAddress: normalizeText(place.formattedAddress),
             name: place.displayName?.text ?? "Unnamed business",
             formattedAddress: place.formattedAddress,
             phone: place.internationalPhoneNumber,
@@ -149,9 +156,14 @@ export async function runDiscovery(
             providerData: { source: "google_places_text_search" },
           })
           .onConflictDoUpdate({
-            target: businesses.googlePlaceId,
+            target: [businesses.organizationId, businesses.googlePlaceId],
             set: {
               name: place.displayName?.text ?? "Unnamed business",
+              normalizedDomain: normalizeDomain(place.websiteUri),
+              normalizedName: normalizeText(
+                place.displayName?.text ?? "Unnamed business",
+              ),
+              normalizedAddress: normalizeText(place.formattedAddress),
               formattedAddress: place.formattedAddress,
               phone: place.internationalPhoneNumber,
               websiteUrl: place.websiteUri,

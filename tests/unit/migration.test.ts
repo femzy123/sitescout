@@ -10,6 +10,10 @@ const workspaceMigration = readFileSync(
   resolve(process.cwd(), "drizzle/0001_per_user_workspaces.sql"),
   "utf8",
 );
+const leadIntakeMigration = readFileSync(
+  resolve(process.cwd(), "drizzle/0002_lead_intake.sql"),
+  "utf8",
+);
 
 describe("initial Neon migration", () => {
   it("guards enums, tables, constraints, and indexes for replay", () => {
@@ -45,6 +49,33 @@ describe("initial Neon migration", () => {
     );
     expect(workspaceMigration).toContain(
       'ALTER TABLE IF EXISTS "organizations" ALTER COLUMN "timezone" SET DEFAULT \'UTC\'',
+    );
+  });
+
+  it("migrates businesses to organization ownership before enforcing tenancy", () => {
+    expect(leadIntakeMigration).toContain(
+      'CREATE TEMP TABLE "sitescout_business_org_map"',
+    );
+    expect(leadIntakeMigration).toContain('UPDATE "discovery_results" result');
+    expect(leadIntakeMigration).toContain('UPDATE "leads" lead');
+    expect(
+      leadIntakeMigration.indexOf('DELETE FROM "businesses"'),
+    ).toBeLessThan(
+      leadIntakeMigration.indexOf(
+        'ALTER COLUMN "organization_id" SET NOT NULL',
+      ),
+    );
+  });
+
+  it("adds tenant-scoped business identity and lead import history", () => {
+    expect(leadIntakeMigration).toContain('"businesses_org_google_place_uidx"');
+    expect(leadIntakeMigration).toContain('"businesses_org_external_uidx"');
+    expect(leadIntakeMigration).toContain(
+      '"discovery_results_business_org_fk"',
+    );
+    expect(leadIntakeMigration).toContain('"leads_business_org_fk"');
+    expect(leadIntakeMigration).toContain(
+      'CREATE TABLE IF NOT EXISTS "lead_imports"',
     );
   });
 });

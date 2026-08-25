@@ -15,6 +15,13 @@
       "when": 1787269401003,
       "tag": "0001_per_user_workspaces",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787616576645,
+      "tag": "0002_lead_intake",
+      "breakpoints": true
     }
   ]
 }
