@@ -1,5 +1,7 @@
-import { discoveryInputSchema, runDiscovery } from "@/server/services/places";
+import { ZodError } from "zod";
+
 import { requireOwnerContext } from "@/server/auth/owner-context";
+import { discoveryInputSchema, runDiscovery } from "@/server/services/places";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -10,7 +12,16 @@ export async function POST(request: Request) {
     const input = discoveryInputSchema.parse(await request.json());
     return Response.json(await runDiscovery(input, context));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Discovery failed";
-    return Response.json({ error: message }, { status: 400 });
+    if (error instanceof ZodError || error instanceof SyntaxError) {
+      return Response.json(
+        { error: "Invalid discovery search request." },
+        { status: 400 },
+      );
+    }
+    console.error("Discovery search failed", error);
+    return Response.json(
+      { error: "Discovery search failed. Please try again." },
+      { status: 500 },
+    );
   }
 }

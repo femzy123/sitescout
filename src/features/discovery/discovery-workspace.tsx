@@ -69,6 +69,7 @@ export function DiscoveryWorkspace({
         }),
       });
       const data = (await response.json()) as SearchResponse;
+      console.log("search response", data)
       if (!response.ok) throw new Error(data.error ?? "Search failed");
       setCandidates(data.candidates);
       if (data.partial)

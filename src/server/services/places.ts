@@ -1,9 +1,9 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { getServerEnv } from "@/lib/env";
 import { normalizeDomain, normalizeText } from "@/lib/lead-intake";
-import { getDb } from "@/server/db";
+import { getDb, type Database } from "@/server/db";
 import {
   businesses,
   discoveryResults,
@@ -58,6 +58,64 @@ export type DiscoveryCandidate = {
   existingLeadId: string | null;
   rank: number;
 };
+
+export function buildGooglePlaceBusinessUpsert(
+  db: Pick<Database, "insert">,
+  place: GooglePlace,
+  organizationId: string,
+  now = new Date(),
+) {
+  return db
+    .insert(businesses)
+    .values({
+      organizationId,
+      googlePlaceId: place.id,
+      normalizedDomain: normalizeDomain(place.websiteUri),
+      normalizedName: normalizeText(
+        place.displayName?.text ?? "Unnamed business",
+      ),
+      normalizedAddress: normalizeText(place.formattedAddress),
+      name: place.displayName?.text ?? "Unnamed business",
+      formattedAddress: place.formattedAddress,
+      phone: place.internationalPhoneNumber,
+      websiteUrl: place.websiteUri,
+      googleMapsUrl: place.googleMapsUri,
+      rating: place.rating,
+      userRatingCount: place.userRatingCount,
+      primaryCategory: place.primaryType,
+      categories: place.types ?? [],
+      latitude: place.location?.latitude,
+      longitude: place.location?.longitude,
+      businessStatus: place.businessStatus,
+      providerData: { source: "google_places_text_search" },
+    })
+    .onConflictDoUpdate({
+      target: [businesses.organizationId, businesses.googlePlaceId],
+      targetWhere: isNotNull(businesses.googlePlaceId),
+      set: {
+        name: place.displayName?.text ?? "Unnamed business",
+        normalizedDomain: normalizeDomain(place.websiteUri),
+        normalizedName: normalizeText(
+          place.displayName?.text ?? "Unnamed business",
+        ),
+        normalizedAddress: normalizeText(place.formattedAddress),
+        formattedAddress: place.formattedAddress,
+        phone: place.internationalPhoneNumber,
+        websiteUrl: place.websiteUri,
+        googleMapsUrl: place.googleMapsUri,
+        rating: place.rating,
+        userRatingCount: place.userRatingCount,
+        primaryCategory: place.primaryType,
+        categories: place.types ?? [],
+        latitude: place.location?.latitude,
+        longitude: place.location?.longitude,
+        businessStatus: place.businessStatus,
+        lastProviderSyncAt: now,
+        updatedAt: now,
+      },
+    })
+    .returning({ id: businesses.id });
+}
 
 export async function runDiscovery(
   input: DiscoveryInput,
@@ -131,55 +189,11 @@ export async function runDiscovery(
         if (input.websiteFilter === "missing" && hasWebsite) continue;
         if (input.websiteFilter === "present" && !hasWebsite) continue;
 
-        const [business] = await db
-          .insert(businesses)
-          .values({
-            organizationId: context.organizationId,
-            googlePlaceId: place.id,
-            normalizedDomain: normalizeDomain(place.websiteUri),
-            normalizedName: normalizeText(
-              place.displayName?.text ?? "Unnamed business",
-            ),
-            normalizedAddress: normalizeText(place.formattedAddress),
-            name: place.displayName?.text ?? "Unnamed business",
-            formattedAddress: place.formattedAddress,
-            phone: place.internationalPhoneNumber,
-            websiteUrl: place.websiteUri,
-            googleMapsUrl: place.googleMapsUri,
-            rating: place.rating,
-            userRatingCount: place.userRatingCount,
-            primaryCategory: place.primaryType,
-            categories: place.types ?? [],
-            latitude: place.location?.latitude,
-            longitude: place.location?.longitude,
-            businessStatus: place.businessStatus,
-            providerData: { source: "google_places_text_search" },
-          })
-          .onConflictDoUpdate({
-            target: [businesses.organizationId, businesses.googlePlaceId],
-            set: {
-              name: place.displayName?.text ?? "Unnamed business",
-              normalizedDomain: normalizeDomain(place.websiteUri),
-              normalizedName: normalizeText(
-                place.displayName?.text ?? "Unnamed business",
-              ),
-              normalizedAddress: normalizeText(place.formattedAddress),
-              formattedAddress: place.formattedAddress,
-              phone: place.internationalPhoneNumber,
-              websiteUrl: place.websiteUri,
-              googleMapsUrl: place.googleMapsUri,
-              rating: place.rating,
-              userRatingCount: place.userRatingCount,
-              primaryCategory: place.primaryType,
-              categories: place.types ?? [],
-              latitude: place.location?.latitude,
-              longitude: place.location?.longitude,
-              businessStatus: place.businessStatus,
-              lastProviderSyncAt: new Date(),
-              updatedAt: new Date(),
-            },
-          })
-          .returning({ id: businesses.id });
+        const [business] = await buildGooglePlaceBusinessUpsert(
+          db,
+          place,
+          context.organizationId,
+        );
 
         const rank = candidates.length + 1;
         const [discoveryResult] = await db
