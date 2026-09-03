@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import type { AuditProgress } from "@/lib/audit-events";
+import { readAuditStartFailure } from "@/lib/audit-start-failure";
 
 export function SingleAuditButton({ leadId }: { leadId: string }) {
   const router = useRouter();
@@ -23,11 +24,11 @@ export function SingleAuditButton({ leadId }: { leadId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leadId }),
       });
-      if (!response.ok || !response.body)
-        throw new Error(
-          (await response.json().catch(() => null))?.error ??
-            "Could not start analysis",
-        );
+      if (!response.ok || !response.body) {
+        const failure = await readAuditStartFailure(response);
+        console.error("[SiteScout audit start failure]", failure.diagnostic);
+        throw new Error(failure.message);
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";

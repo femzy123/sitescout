@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { Input } from "@/components/ui/input";
 import type { AuditProgress } from "@/lib/audit-events";
+import { readAuditStartFailure } from "@/lib/audit-start-failure";
 import { titleCase } from "@/lib/utils";
 import type { LeadListRow } from "@/server/services/leads";
 
@@ -69,11 +70,11 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leadId: lead.id }),
     });
-    if (!response.ok || !response.body)
-      throw new Error(
-        (await response.json().catch(() => null))?.error ??
-          "Audit could not start",
-      );
+    if (!response.ok || !response.body) {
+      const failure = await readAuditStartFailure(response);
+      console.error("[SiteScout audit start failure]", failure.diagnostic);
+      throw new Error(failure.message);
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

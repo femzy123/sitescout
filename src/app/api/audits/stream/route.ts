@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { unstable_rethrow } from "next/navigation";
 
 import type { AuditProgress } from "@/lib/audit-events";
 import { requireOwnerContext } from "@/server/auth/owner-context";
@@ -6,7 +7,6 @@ import {
   formatAuditDiagnostic,
   isAuditDebugEnabled,
 } from "@/server/services/audit/diagnostics";
-import { runLeadAudit } from "@/server/services/audit/run-audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 240;
@@ -14,8 +14,8 @@ export const maxDuration = 240;
 const inputSchema = z.object({ leadId: z.string().uuid() });
 
 export async function POST(request: Request) {
-  const context = await requireOwnerContext();
   try {
+    const context = await requireOwnerContext();
     const { leadId } = inputSchema.parse(await request.json());
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -24,6 +24,8 @@ export async function POST(request: Request) {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
         };
         try {
+          const { runLeadAudit } =
+            await import("@/server/services/audit/run-audit");
           await runLeadAudit(leadId, context, emit);
         } catch (error) {
           console.error("[SiteScout audit:audit_fatal]", error);
@@ -51,17 +53,21 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    unstable_rethrow(error);
     console.error("[SiteScout audit:start]", error);
     const details = isAuditDebugEnabled()
       ? formatAuditDiagnostic(error)
       : undefined;
+    const isBadRequest =
+      error instanceof z.ZodError || error instanceof SyntaxError;
     return Response.json(
       {
-        error:
-          error instanceof Error ? error.message : "Could not start analysis",
+        error: isBadRequest
+          ? "Invalid audit request"
+          : "Could not start analysis",
         ...(details ? { details } : {}),
       },
-      { status: 400 },
+      { status: isBadRequest ? 400 : 500 },
     );
   }
 }

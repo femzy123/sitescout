@@ -80,4 +80,42 @@ describe("audit stream route diagnostics", () => {
     });
     expect(event).not.toHaveProperty("details");
   });
+
+  it("returns redacted details when owner context fails before streaming", async () => {
+    process.env.AUDIT_DEBUG = "true";
+    vi.mocked(requireOwnerContext).mockRejectedValue(
+      new Error(
+        "Database connection failed at postgres://owner:password@example.com/app?sslmode=require",
+      ),
+    );
+
+    const response = await POST(request());
+    const body = await response.text();
+    const payload = JSON.parse(body);
+
+    expect(response.status).toBe(500);
+    expect(payload).toMatchObject({
+      error: "Could not start analysis",
+      details: {
+        name: "Error",
+        causes: [],
+      },
+    });
+    expect(body).not.toMatch(/owner:password|sslmode/);
+  });
+
+  it("does not expose owner-context failures when debug mode is disabled", async () => {
+    process.env.AUDIT_DEBUG = "false";
+    vi.mocked(requireOwnerContext).mockRejectedValue(
+      new Error("Database connection failed with password=top-secret"),
+    );
+
+    const response = await POST(request());
+    const body = await response.text();
+    const payload = JSON.parse(body);
+
+    expect(response.status).toBe(500);
+    expect(payload).toEqual({ error: "Could not start analysis" });
+    expect(body).not.toContain("top-secret");
+  });
 });

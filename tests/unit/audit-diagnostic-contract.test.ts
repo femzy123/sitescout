@@ -18,6 +18,10 @@ describe("temporary audit diagnostics contract", () => {
     expect(runAudit).toContain('"ai_assessment"');
     expect(route).toContain('"audit_fatal"');
     expect(route).toContain("formatAuditDiagnostic(error)");
+    expect(route).toMatch(/const \{ runLeadAudit \} =\s+await import\(/);
+    expect(route).toContain('"@/server/services/audit/run-audit"');
+    expect(runAudit).toContain('await import("./browser-audit")');
+    expect(runAudit).toContain('diagnostic("chromium_setup", error, 10)');
   });
 
   it("logs diagnostic stream events in single and bulk analysis clients", () => {

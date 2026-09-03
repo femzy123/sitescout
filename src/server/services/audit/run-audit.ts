@@ -15,10 +15,9 @@ import {
   calculateOpportunityScore,
   type AuditEvidence,
 } from "@/server/services/scoring";
-import {
-  runBrowserAudit,
-  type BrowserAuditDiagnosticStage,
-  type BrowserEvidence,
+import type {
+  BrowserAuditDiagnosticStage,
+  BrowserEvidence,
 } from "./browser-audit";
 import { reportAuditDiagnostic } from "./diagnostics";
 import { validateSafeUrl } from "./url-safety";
@@ -177,11 +176,14 @@ export async function runLeadAudit(
       }
 
       if (safeUrl) {
+        let browserFailureReported = false;
         try {
+          const { runBrowserAudit } = await import("./browser-audit");
           browser = await runBrowserAudit(
             safeUrl,
             progress,
             async (stage, error) => {
+              browserFailureReported = true;
               const diagnosticProgress =
                 stage === "chromium_setup"
                   ? 10
@@ -191,7 +193,9 @@ export async function runLeadAudit(
               await diagnostic(stage, error, diagnosticProgress);
             },
           );
-        } catch {
+        } catch (error) {
+          if (!browserFailureReported)
+            await diagnostic("chromium_setup", error, 10);
           status = "unreachable";
           await progress(
             74,
