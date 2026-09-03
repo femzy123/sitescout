@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import type { AuditProgress } from "@/lib/audit-events";
 
 export function SingleAuditButton({ leadId }: { leadId: string }) {
   const router = useRouter();
@@ -38,19 +39,24 @@ export function SingleAuditButton({ leadId }: { leadId: string }) {
         buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
-          const event = JSON.parse(line) as {
-            type: string;
-            progress: number;
-            message: string;
-          };
+          const event = JSON.parse(line) as AuditProgress;
+          if (event.type === "diagnostic") {
+            console.error("[SiteScout audit diagnostic]", event);
+            continue;
+          }
           setProgress(event.progress);
           setMessage(event.message);
-          if (event.type === "error") throw new Error(event.message);
+          if (event.type === "error") {
+            if (event.details)
+              console.error("[SiteScout audit diagnostic]", event);
+            throw new Error(event.message);
+          }
         }
       }
       toast.success("Website analysis complete");
       router.refresh();
     } catch (error) {
+      console.error("[SiteScout audit request failed]", error);
       toast.error("Analysis failed", {
         description: error instanceof Error ? error.message : "Try again",
       });

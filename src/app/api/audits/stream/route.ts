@@ -1,10 +1,12 @@
 import { z } from "zod";
 
+import type { AuditProgress } from "@/lib/audit-events";
 import { requireOwnerContext } from "@/server/auth/owner-context";
 import {
-  runLeadAudit,
-  type AuditProgress,
-} from "@/server/services/audit/run-audit";
+  formatAuditDiagnostic,
+  isAuditDebugEnabled,
+} from "@/server/services/audit/diagnostics";
+import { runLeadAudit } from "@/server/services/audit/run-audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 240;
@@ -24,15 +26,17 @@ export async function POST(request: Request) {
         try {
           await runLeadAudit(leadId, context, emit);
         } catch (error) {
+          console.error("[SiteScout audit:audit_fatal]", error);
+          const details = isAuditDebugEnabled()
+            ? formatAuditDiagnostic(error)
+            : undefined;
           await emit({
             type: "error",
             progress: 100,
-            stage: "failed",
-            message:
-              error instanceof Error
-                ? error.message
-                : "Website analysis failed",
+            stage: "audit_fatal",
+            message: "Website analysis failed",
             leadId,
+            ...(details ? { details } : {}),
           });
         } finally {
           controller.close();
@@ -47,10 +51,15 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    console.error("[SiteScout audit:start]", error);
+    const details = isAuditDebugEnabled()
+      ? formatAuditDiagnostic(error)
+      : undefined;
     return Response.json(
       {
         error:
           error instanceof Error ? error.message : "Could not start analysis",
+        ...(details ? { details } : {}),
       },
       { status: 400 },
     );

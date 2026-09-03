@@ -1,5 +1,6 @@
 import { and, eq, lt } from "drizzle-orm";
 
+import type { AuditProgress } from "@/lib/audit-events";
 import { getServerEnv } from "@/lib/env";
 import { getDb } from "@/server/db";
 import {
@@ -14,17 +15,15 @@ import {
   calculateOpportunityScore,
   type AuditEvidence,
 } from "@/server/services/scoring";
-import { runBrowserAudit, type BrowserEvidence } from "./browser-audit";
+import {
+  runBrowserAudit,
+  type BrowserAuditDiagnosticStage,
+  type BrowserEvidence,
+} from "./browser-audit";
+import { reportAuditDiagnostic } from "./diagnostics";
 import { validateSafeUrl } from "./url-safety";
 
-export type AuditProgress = {
-  type: "progress" | "complete" | "error";
-  progress: number;
-  stage: string;
-  message: string;
-  auditId?: string;
-  leadId?: string;
-};
+export type { AuditProgress } from "@/lib/audit-events";
 
 export async function runLeadAudit(
   leadId: string,
@@ -106,7 +105,9 @@ export async function runLeadAudit(
     })
     .returning({ id: websiteAudits.id });
 
+  let currentProgress = 0;
   const progress = async (value: number, stage: string, message: string) => {
+    currentProgress = value;
     await db
       .update(websiteAudits)
       .set({ progress: value, currentStage: stage })
@@ -120,6 +121,20 @@ export async function runLeadAudit(
       leadId,
     });
   };
+  const diagnostic = async (
+    stage: BrowserAuditDiagnosticStage | "ai_assessment" | "audit_fatal",
+    error: unknown,
+    value = currentProgress,
+  ) =>
+    reportAuditDiagnostic({
+      enabled: env.AUDIT_DEBUG,
+      emit,
+      error,
+      stage,
+      progress: value,
+      leadId,
+      auditId: audit.id,
+    });
 
   try {
     await progress(5, "validating", "Validating website and network safety");
@@ -129,23 +144,14 @@ export async function runLeadAudit(
     let browser: BrowserEvidence | null = null;
 
     if (record.business.websiteUrl) {
+      let safeUrl: URL | undefined;
       try {
-        const safeUrl = await validateSafeUrl(record.business.websiteUrl);
+        safeUrl = await validateSafeUrl(record.business.websiteUrl);
         normalizedUrl = safeUrl.toString();
         await db
           .update(websiteAudits)
           .set({ normalizedUrl })
           .where(eq(websiteAudits.id, audit.id));
-        try {
-          browser = await runBrowserAudit(safeUrl, progress);
-        } catch {
-          status = "unreachable";
-          await progress(
-            74,
-            "unreachable",
-            "Website could not be loaded; using business signals",
-          );
-        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unsafe website URL";
@@ -159,14 +165,40 @@ export async function runLeadAudit(
                 eq(leads.id, leadId),
               ),
             );
-          throw new Error(message);
+          throw new Error(message, { cause: error });
         }
+        await diagnostic("page_load", error, 5);
         status = "unreachable";
         await progress(
           74,
           "unreachable",
           "Website did not resolve; using business signals",
         );
+      }
+
+      if (safeUrl) {
+        try {
+          browser = await runBrowserAudit(
+            safeUrl,
+            progress,
+            async (stage, error) => {
+              const diagnosticProgress =
+                stage === "chromium_setup"
+                  ? 10
+                  : stage === "page_load"
+                    ? 22
+                    : 62;
+              await diagnostic(stage, error, diagnosticProgress);
+            },
+          );
+        } catch {
+          status = "unreachable";
+          await progress(
+            74,
+            "unreachable",
+            "Website could not be loaded; using business signals",
+          );
+        }
       }
     } else {
       await progress(
@@ -213,7 +245,8 @@ export async function runLeadAudit(
           ),
         ),
       ]);
-    } catch {
+    } catch (error) {
+      await diagnostic("ai_assessment", error, 80);
       /* The deterministic score remains useful and is explicitly provisional. */
     }
 
@@ -317,6 +350,7 @@ export async function runLeadAudit(
     });
     return { auditId: audit.id, score };
   } catch (error) {
+    await diagnostic("audit_fatal", error).catch(() => undefined);
     const message =
       error instanceof Error ? error.message : "Website analysis failed";
     await db

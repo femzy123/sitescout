@@ -22,16 +22,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { Input } from "@/components/ui/input";
+import type { AuditProgress } from "@/lib/audit-events";
 import { titleCase } from "@/lib/utils";
 import type { LeadListRow } from "@/server/services/leads";
-
-type ProgressEvent = {
-  type: "progress" | "complete" | "error";
-  progress: number;
-  stage: string;
-  message: string;
-  leadId?: string;
-};
 
 export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
   const router = useRouter();
@@ -92,7 +85,11 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (!line.trim()) continue;
-        const event = JSON.parse(line) as ProgressEvent;
+        const event = JSON.parse(line) as AuditProgress;
+        if (event.type === "diagnostic") {
+          console.error("[SiteScout audit diagnostic]", event);
+          continue;
+        }
         setBatchProgress((state) => ({
           current,
           total,
@@ -101,7 +98,11 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
           stage: event.message,
           failed: state?.failed ?? 0,
         }));
-        if (event.type === "error") throw new Error(event.message);
+        if (event.type === "error") {
+          if (event.details)
+            console.error("[SiteScout audit diagnostic]", event);
+          throw new Error(event.message);
+        }
       }
     }
   }
@@ -117,6 +118,7 @@ export function LeadsTable({ leads }: { leads: LeadListRow[] }) {
       try {
         await runOne(batch[index], index + 1, batch.length);
       } catch (error) {
+        console.error("[SiteScout audit request failed]", error);
         failed += 1;
         setBatchProgress((state) => (state ? { ...state, failed } : null));
         toast.error(`${batch[index].name} failed`, {

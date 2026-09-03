@@ -32,4 +32,9 @@ describe("environment contract", () => {
     );
     expect(example).toContain("DATABASE_URL_UNPOOLED=");
   });
+
+  it("documents the temporary audit diagnostics switch", () => {
+    expect(example).toContain("AUDIT_DEBUG=false");
+    expect(schema).toContain("AUDIT_DEBUG");
+  });
 });
